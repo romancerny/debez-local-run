@@ -47,22 +47,53 @@ if ($LASTEXITCODE -ne 0) {
 # Start Zookeeper (required for Kafka)
 Write-Host "Starting Zookeeper..." -ForegroundColor Yellow
 $zookeeperExists = podman container exists zookeeper 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "Zookeeper container exists, removing to ensure clean configuration..." -ForegroundColor Yellow
+    podman rm -f zookeeper
+}
+
+podman run -d `
+    --name zookeeper `
+    --pod $PODMAN_GROUP `
+    --network $NETWORK_NAME `
+    -e ZOOKEEPER_CLIENT_PORT=2181 `
+    -e ZOOKEEPER_TICK_TIME=2000 `
+    -e ZOOKEEPER_INIT_LIMIT=5 `
+    -e ZOOKEEPER_SYNC_LIMIT=2 `
+    confluentinc/cp-zookeeper:latest
+
 if ($LASTEXITCODE -ne 0) {
-    podman run -d `
-        --name zookeeper `
-        --pod $PODMAN_GROUP `
-        --network $NETWORK_NAME `
-        -e ZOOKEEPER_CLIENT_PORT=2181 `
-        -e ZOOKEEPER_TICK_TIME=2000 `
-        confluentinc/cp-zookeeper:latest
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Failed to start Zookeeper" -ForegroundColor Red
-        exit 1
+    Write-Host "Failed to start Zookeeper" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "Waiting for Zookeeper to be ready..." -ForegroundColor Yellow
+Start-Sleep -Seconds 10
+
+# Verify Zookeeper is responding
+$maxRetries = 10
+$retryCount = 0
+$zookeeperReady = $false
+
+while ($retryCount -lt $maxRetries -and -not $zookeeperReady) {
+    try {
+        $result = podman exec zookeeper bash -c "echo ruok | nc localhost 2181" 2>$null
+        if ($result -eq "imok") {
+            $zookeeperReady = $true
+        }
+    } catch {
+        # Continue retrying
     }
-    Start-Sleep -Seconds 5
+    if (-not $zookeeperReady) {
+        $retryCount++
+        Start-Sleep -Seconds 2
+    }
+}
+
+if (-not $zookeeperReady) {
+    Write-Host "Warning: Zookeeper may not be fully ready, but continuing..." -ForegroundColor Yellow
 } else {
-    Write-Host "Zookeeper already exists, starting..." -ForegroundColor Yellow
-    podman start zookeeper
+    Write-Host "Zookeeper is ready" -ForegroundColor Green
 }
 
 # Start Kafka
@@ -78,7 +109,10 @@ podman run -d `
     --pod $PODMAN_GROUP `
     --network $NETWORK_NAME `
     -e KAFKA_BROKER_ID=1 `
-    -e KAFKA_ZOOKEEPER_CONNECT=localhost:2181 `
+    -e KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181 `
+    -e KAFKA_ZOOKEEPER_SESSION_TIMEOUT_MS=18000 `
+    -e KAFKA_ZOOKEEPER_CONNECTION_TIMEOUT_MS=18000 `
+    -e KAFKA_ZOOKEEPER_REQUEST_TIMEOUT_MS=30000 `
     -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092 `
     -e KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092 `
     -e KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT `
