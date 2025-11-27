@@ -68,28 +68,32 @@ if ($LASTEXITCODE -ne 0) {
 # Start Kafka
 Write-Host "Starting Kafka..." -ForegroundColor Yellow
 $kafkaExists = podman container exists $KAFKA_CONTAINER 2>$null
-if ($LASTEXITCODE -ne 0) {
-    podman run -d `
-        --name $KAFKA_CONTAINER `
-        --pod $PODMAN_GROUP `
-        --network $NETWORK_NAME `
-        -e KAFKA_BROKER_ID=1 `
-        -e KAFKA_ZOOKEEPER_CONNECT=localhost:2181 `
-        -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092 `
-        -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 `
-        -e KAFKA_AUTO_CREATE_TOPICS_ENABLE=true `
-        confluentinc/cp-kafka:latest
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Failed to start Kafka" -ForegroundColor Red
-        exit 1
-    }
-    Write-Host "Waiting for Kafka to be ready..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 15
-} else {
-    Write-Host "Kafka already exists, starting..." -ForegroundColor Yellow
-    podman start $KAFKA_CONTAINER
-    Start-Sleep -Seconds 5
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "Kafka container exists, removing to ensure clean configuration..." -ForegroundColor Yellow
+    podman rm -f $KAFKA_CONTAINER
 }
+
+podman run -d `
+    --name $KAFKA_CONTAINER `
+    --pod $PODMAN_GROUP `
+    --network $NETWORK_NAME `
+    -e KAFKA_BROKER_ID=1 `
+    -e KAFKA_ZOOKEEPER_CONNECT=localhost:2181 `
+    -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092 `
+    -e KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092 `
+    -e KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT `
+    -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 `
+    -e KAFKA_AUTO_CREATE_TOPICS_ENABLE=true `
+    -e KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1 `
+    -e KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1 `
+    confluentinc/cp-kafka:7.4.0
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Failed to start Kafka" -ForegroundColor Red
+    exit 1
+}
+Write-Host "Waiting for Kafka to be ready..." -ForegroundColor Yellow
+Start-Sleep -Seconds 15
 
 # Start init Kafka container to create topic
 Write-Host "Creating init Kafka container to create 'ex2-am' topic..." -ForegroundColor Yellow
@@ -104,7 +108,7 @@ podman run --rm `
     --pod $PODMAN_GROUP `
     --network $NETWORK_NAME `
     -e KAFKA_BOOTSTRAP_SERVERS=localhost:9092 `
-    confluentinc/cp-kafka:latest `
+    confluentinc/cp-kafka:7.4.0 `
     kafka-topics --create `
     --if-not-exists `
     --bootstrap-server localhost:9092 `
