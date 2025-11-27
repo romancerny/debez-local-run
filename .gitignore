@@ -1,0 +1,31 @@
+# PowerShell
+*.ps1xml
+*.pssc
+*.psm1
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Podman/Docker
+*.tar
+*.tar.gz
+
+# Config files with sensitive data
+*config*.json
+*secrets*
+*.env
+
