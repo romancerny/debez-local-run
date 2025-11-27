@@ -127,35 +127,78 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 Write-Host "Waiting for Kafka to be ready..." -ForegroundColor Yellow
-Start-Sleep -Seconds 15
+Start-Sleep -Seconds 10
 
-# Start init Kafka container to create topic
-Write-Host "Creating init Kafka container to create 'ex2-am' topic..." -ForegroundColor Yellow
-$initKafkaExists = podman container exists $INIT_KAFKA_CONTAINER 2>$null
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "Removing existing init-kafka container..." -ForegroundColor Yellow
-    podman rm -f $INIT_KAFKA_CONTAINER
+# Verify Kafka is ready by checking if we can list topics
+Write-Host "Verifying Kafka is ready..." -ForegroundColor Yellow
+$maxRetries = 20
+$retryCount = 0
+$kafkaReady = $false
+
+while ($retryCount -lt $maxRetries -and -not $kafkaReady) {
+    try {
+        $result = podman exec $KAFKA_CONTAINER kafka-topics --bootstrap-server localhost:9092 --list 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $kafkaReady = $true
+            Write-Host "Kafka is ready" -ForegroundColor Green
+        }
+    } catch {
+        # Continue retrying
+    }
+    if (-not $kafkaReady) {
+        $retryCount++
+        Write-Host "Waiting for Kafka to be ready... (attempt $retryCount/$maxRetries)" -ForegroundColor Yellow
+        Start-Sleep -Seconds 3
+    }
 }
 
-podman run --rm `
-    --name $INIT_KAFKA_CONTAINER `
-    --pod $PODMAN_GROUP `
-    --network $NETWORK_NAME `
-    -e KAFKA_BOOTSTRAP_SERVERS=localhost:9092 `
-    confluentinc/cp-kafka:7.4.0 `
-    kafka-topics --create `
-    --if-not-exists `
-    --bootstrap-server localhost:9092 `
-    --replication-factor 1 `
-    --partitions 1 `
-    --topic ex2-am
+if (-not $kafkaReady) {
+    Write-Host "Warning: Kafka may not be fully ready, but continuing with topic creation..." -ForegroundColor Yellow
+}
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Failed to create topic 'ex2-am'" -ForegroundColor Red
+# Create topic using the running Kafka container
+Write-Host "Creating 'ex2-am' topic..." -ForegroundColor Yellow
+$topicCreated = $false
+$maxTopicRetries = 10
+$topicRetryCount = 0
+
+while ($topicRetryCount -lt $maxTopicRetries -and -not $topicCreated) {
+    Write-Host "Attempting to create topic 'ex2-am' (attempt $($topicRetryCount + 1)/$maxTopicRetries)..." -ForegroundColor Yellow
+    
+    # Execute kafka-topics command directly in the Kafka container
+    $result = podman exec $KAFKA_CONTAINER kafka-topics --create `
+        --if-not-exists `
+        --bootstrap-server localhost:9092 `
+        --replication-factor 1 `
+        --partitions 1 `
+        --topic ex2-am 2>&1
+
+    if ($LASTEXITCODE -eq 0) {
+        $topicCreated = $true
+        Write-Host "Topic 'ex2-am' created successfully" -ForegroundColor Green
+    } else {
+        # Check if topic already exists (that's okay)
+        if ($result -match "already exists" -or $result -match "TopicExistsException") {
+            $topicCreated = $true
+            Write-Host "Topic 'ex2-am' already exists" -ForegroundColor Green
+        } else {
+            $topicRetryCount++
+            if ($topicRetryCount -lt $maxTopicRetries) {
+                Write-Host "Topic creation failed: $result" -ForegroundColor Yellow
+                Write-Host "Retrying in 3 seconds..." -ForegroundColor Yellow
+                Start-Sleep -Seconds 3
+            } else {
+                Write-Host "Failed to create topic after $maxTopicRetries attempts. Last error: $result" -ForegroundColor Red
+            }
+        }
+    }
+}
+
+if (-not $topicCreated) {
+    Write-Host "Failed to create topic 'ex2-am' after $maxTopicRetries attempts" -ForegroundColor Red
+    Write-Host "You may need to create it manually or check Kafka logs" -ForegroundColor Yellow
     exit 1
 }
-
-Write-Host "Topic 'ex2-am' created successfully" -ForegroundColor Green
 
 # Start Kafka UI (optional but helpful for monitoring)
 Write-Host "Starting Kafka UI..." -ForegroundColor Yellow
